@@ -108,6 +108,10 @@ type AppendEntriesArgs struct {
 type AppendEntriesReply struct {
 	Term          int
 	Success       bool
+	// see extended paper 5.3 最后一节
+	// 当log consistency check不一致的时候，将会对nextIndex减1，每次出现log inconsistency只减少1，所以很慢，需要提高效率
+	// 所以follower会在AppendEntriesReply中附加上ConflictTerm和ConflictTerm的第一个index
+	// 论文还指出，这项优化并不一定是必须的，因为log inconsistency出现的频率不高
 	ConflictTerm  int
 	ConflictIndex int
 }
@@ -297,6 +301,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		dropAndSet(rf.appendEntryCh)
 
 		if args.PrevLogIndex > rf.getLastLogIndex() {
+			// slides 22 页中 follower a的情况
 			conflictIndex = len(rf.Logs)
 			conflictTerm = 0
 		} else {
@@ -436,7 +441,7 @@ func (rf *Raft) advanceCommitIndex() {
 	matchIndexes[rf.me] = len(rf.Logs) - 1
 	sort.Ints(matchIndexes)
 
-	N := matchIndexes[len(rf.peers)/2]
+	N := matchIndexes[len(rf.peers) / 2]
 	log.Infof("matchIndexes:%v, N:%v", matchIndexes, N)
 
 	if rf.state == Leader && N > rf.commitIndex && rf.Logs[N].Term == rf.CurrentTerm {
@@ -478,19 +483,16 @@ func (rf *Raft) startAppendEntries() {
 				if !ok {
 					return
 				}
-
 				rf.mutex.Lock()
 				if reply.Term > rf.CurrentTerm {
 					rf.convertToFollower(reply.Term)
 					rf.mutex.Unlock()
 					return
 				}
-
 				if !rf.checkState(Leader, args.Term) {
 					rf.mutex.Unlock()
 					return
 				}
-
 				if reply.Success {
 					// AppendEntries成功，更新对应raft实例的nextIndex和matchIndex值, Leader 5.3
 					rf.matchIndex[serverIndex] = args.PrevLogIndex + len(args.Entries)
@@ -693,7 +695,7 @@ func Make(peers []*rpc_mock.ClientEnd, me int, persister *Persister, applyCh cha
 	rf.VotedFor = VoteNull
 
 	// 如果slice的第一个元素为nil会导致gob Encode/Decode为空,这里改为一个空的LogEntry便于编码。
-	// raft 的commit规则除了要求 log被复制到了majority之外，还要求至少看到一个current term的log被commit了，这要求一个哨兵值
+	// raft的commit规则除了要求 log被复制到了majority之外，还要求至少看到一个current term的log被commit了，这要求一个哨兵值
 	rf.Logs = make([]LogEntry, 0)
 	sentinel := LogEntry{}
 	rf.Logs = append(rf.Logs, sentinel)
@@ -718,7 +720,7 @@ func Make(peers []*rpc_mock.ClientEnd, me int, persister *Persister, applyCh cha
 	Loop:
 		for {
 			select {
-			case <-rf.exitCh:
+			case <- rf.exitCh:
 				log.Infof("Exit Server(%v)", rf.me)
 				break Loop
 			default:
@@ -756,7 +758,7 @@ func Make(peers []*rpc_mock.ClientEnd, me int, persister *Persister, applyCh cha
 				time.Sleep(rf.heartbeatInterval)
 			}
 		}
-	}()
+	} ()
 
 	return rf
 }
