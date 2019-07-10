@@ -68,3 +68,5 @@ raft的做法是当candidate的log比voting server更完整才能才能获得投
 Raft slides: https://www.jianshu.com/p/ee7646c0f4cf
 
 Raft paper: in search of an understandable consensus algorithm
+
+MIT 6.284: https://pdos.csail.mit.edu/6.824/
