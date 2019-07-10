@@ -130,7 +130,7 @@ type Raft struct {
 
 	CurrentTerm int // all servers persistent
 	VotedFor    int // all servers persistent
-	Logs        []LogEntry
+	Logs        []LogEntry // all servers persistent
 
 	commitIndex int // all servers volatile
 	lastApplied int // all servers volatile
@@ -179,6 +179,7 @@ func (rf *Raft) persist() {
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
 	//DPrintf("persist:%v, %v, %v", rf.CurrentTerm, rf.VotedFor, rf.Logs)
+	// FIXME: need mutex ?
 	w := new(bytes.Buffer)
 	e := gob.NewEncoder(w)
 	e.Encode(rf.CurrentTerm)
@@ -205,9 +206,12 @@ func (rf *Raft) readPersist(data []byte) {
 	}
 	r := bytes.NewBuffer(data)
 	d := gob.NewDecoder(r)
-	d.Decode(&rf.CurrentTerm)
-	d.Decode(&rf.VotedFor)
-	d.Decode(&rf.Logs)
+	err := d.Decode(&rf.CurrentTerm)
+	err = d.Decode(&rf.VotedFor)
+	err = d.Decode(&rf.Logs)
+	if err != nil {
+		log.Fatal("gob.NewDecoder.Decode error")
+	}
 }
 
 //
@@ -218,7 +222,7 @@ type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
 	Term         int
 	CandidateId  int
-	LastLogIndex int
+	LastLogIndex int // log consistency check
 	LastLogTerm  int
 }
 
@@ -268,7 +272,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 
 func dropAndSet(ch chan bool) {
 	select {
-	case <-ch:
+	case <- ch:
 	default:
 	}
 	ch <- true
