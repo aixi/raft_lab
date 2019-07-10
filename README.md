@@ -63,3 +63,8 @@ raft的做法是当candidate的log比voting server更完整才能才能获得投
 已经投票，但是由于网络原因，candidate没有收到投票的结果，此时candidate会重试RequestVote，只有当votedFor和candidate Id相同，才投票
 
 (TODO)
+
+## Reference
+Raft slides: https://www.jianshu.com/p/ee7646c0f4cf
+
+Raft paper: in search of an understandable consensus algorithm
