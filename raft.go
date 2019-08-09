@@ -226,7 +226,8 @@ type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
 	Term         int
 	CandidateId  int
-	LastLogIndex int // log consistency check
+	// leader completeness check
+	LastLogIndex int
 	LastLogTerm  int
 }
 
@@ -252,7 +253,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	// all servers
 	if args.Term > rf.CurrentTerm {
 		rf.convertToFollower(args.Term)
-		// 这里不要直接return,这个节点不够up-to-date，是follower所以应该进行后面的投票
+		// 这里不要直接return,这个节点不够up-to-date，是follower所以应该进行后续投票操作
 	}
 
 	voteGranted := false
@@ -294,20 +295,25 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 	// all servers
 	if args.Term > rf.CurrentTerm {
 		rf.convertToFollower(args.Term)
+		// 这里不要直接return, 进行后续的log replication操作
 	}
-
+	// rf.convertToFollower(term int)是有参数的，本节点的CurrentTerm设置为args.Term了
 	if args.Term == rf.CurrentTerm {
 		rf.state = Follower
 		dropAndSet(rf.appendEntryCh)
 
 		if args.PrevLogIndex > rf.getLastLogIndex() {
 			// slides 22 页中 follower a的情况
+			// missing entry
 			conflictIndex = len(rf.Logs)
 			conflictTerm = 0
 		} else {
+			// log consistency check
 			prevLogTerm := rf.Logs[args.PrevLogIndex].Term
 			if args.PrevLogTerm != prevLogTerm {
 				conflictTerm = rf.Logs[args.PrevLogIndex].Term
+				// find first index of conflictTerm
+				// see Raft paper 5.3 最后3断
 				for i := 1; i < len(rf.Logs); i++ {
 					if rf.Logs[i].Term == conflictTerm {
 						conflictIndex = i
@@ -319,8 +325,9 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 			if args.PrevLogIndex == 0 || (args.PrevLogIndex <= rf.getLastLogIndex() && args.PrevLogTerm == prevLogTerm) {
 				success = true
 				index := args.PrevLogIndex
+				// 这个arg.Entries是slice可以一次携带多个Command
 				for i := 0; i < len(args.Entries); i++ {
-					index += 1
+					index++
 					if index > rf.getLastLogIndex() {
 						rf.Logs = append(rf.Logs, args.Entries[i:]...)
 						break
@@ -435,6 +442,13 @@ If there exists an N such that N > commitIndex, a majority
 of matchIndex[i] ≥ N, and Logs[N].term == CurrentTerm:
 set commitIndex = N
 */
+
+/*
+ entry commitment rule
+1. the entry must be stored on a majority of servers
+2. At least one new entry from the leader's term must also be stored on majority of servers(this need a sentinel value)
+*/
+
 func (rf *Raft) advanceCommitIndex() {
 	matchIndexes := make([]int, len(rf.matchIndex))
 	copy(matchIndexes, rf.matchIndex)
@@ -502,7 +516,8 @@ func (rf *Raft) startAppendEntries() {
 					rf.mutex.Unlock()
 					return
 				} else {
-					// AppendEntries失败，减小对应raft实例的nextIndex的值重试 Leader 5.3
+					// AppendEntries失败，减小对应raft实例的nextIndex的值重试 paper 5.3
+					// 这里要注意理解conflictIndex,conflictTerm在减少重试次数方面起的作用
 					newIndex := reply.ConflictIndex
 					for i := 1; i < len(rf.Logs); i++ {
 						entry := rf.Logs[i]
@@ -519,7 +534,7 @@ func (rf *Raft) startAppendEntries() {
 	}
 }
 
-// 对于所有服务器都需要执行的
+// 将msg放入applyCh即是将command 给state machine执行
 func (rf *Raft) applyLogs() {
 	//注意这里的for循环，如果写成if那就错了，会无法通过lab-2B的测试。
 	for rf.commitIndex > rf.lastApplied {
@@ -604,7 +619,7 @@ func (rf *Raft) leaderElection() {
 					atomic.AddInt32(&voteReceived, 1)
 				}
 
-				if atomic.LoadInt32(&voteReceived) > int32(len(rf.peers)/2) {
+				if atomic.LoadInt32(&voteReceived) > int32(len(rf.peers) / 2) {
 					log.Infof("Server(%d) win vote", rf.me)
 					// 这两句调用顺序很重要
 					rf.convertToLeader()
@@ -641,6 +656,7 @@ func (rf *Raft) getPrevLogTerm(serverIdx int) int {
 	}
 }
 
+// logs index started from 1
 func (rf *Raft) getLastLogIndex() int {
 	return len(rf.Logs) - 1
 }
@@ -695,7 +711,8 @@ func Make(peers []*rpc_mock.ClientEnd, me int, persister *Persister, applyCh cha
 	rf.VotedFor = VoteNull
 
 	// 如果slice的第一个元素为nil会导致gob Encode/Decode为空,这里改为一个空的LogEntry便于编码。
-	// raft的commit规则除了要求 log被复制到了majority之外，还要求至少看到一个current term的log被commit了，这要求一个哨兵值
+	// 所以logs其实是从1开始的
+	// Raft的commit规则除了要求 log被复制到了majority之外，还要求Leader至少还有一个current term的log被commit了，这要求一个哨兵值
 	rf.Logs = make([]LogEntry, 0)
 	sentinel := LogEntry{}
 	rf.Logs = append(rf.Logs, sentinel)
